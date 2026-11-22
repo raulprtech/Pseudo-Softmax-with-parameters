@@ -1,3 +1,5 @@
+`ifndef RAULPRTECH_PSEUDO_SOFTMAX_SHIFT_REG_V
+`define RAULPRTECH_PSEUDO_SOFTMAX_SHIFT_REG_V
 
 module shift_reg #(parameter DATA_WIDTH = 8)(
   input clk,
@@ -9,3 +11,4 @@ module shift_reg #(parameter DATA_WIDTH = 8)(
     data_out <= data_in >> shift_in;
   end
 endmodule
+`endif
