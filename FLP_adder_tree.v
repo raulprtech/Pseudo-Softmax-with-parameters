@@ -30,64 +30,75 @@ module FLP_adder_tree #(
   output [MANT_WIDTH-1:0] mant
 );
 
-  wire [EXP_WIDTH-1:0] exp_n[NUM_INPUTS-1:0];
-  wire [MANT_WIDTH-1:0] mant_n[NUM_INPUTS-1:0];
-  
-//  wire exp_bus[NUM_INPUTS*EXP_WIDTH*((NUM_INPUTS/2)-1):0];
-//  wire mant_bus[NUM_INPUTS*MANT_WIDTH*((NUM_INPUTS/2)-1):0];
-  wire [NUM_INPUTS*EXP_WIDTH*((NUM_INPUTS/2)-1):0] exp_bus;
-  wire [NUM_INPUTS*MANT_WIDTH*((NUM_INPUTS/2)-1):0] mant_bus;
- 
-  
-//  wire [MANT_WIDTH-1:0] x[NUM_INPUTS-1:0];
+  localparam integer PAIRS = NUM_INPUTS / 2;
+  localparam integer LEAVES = (NUM_INPUTS + 1) / 2;
+  localparam integer NODES = 2 * LEAVES - 1;
+  localparam integer WORD_WIDTH = EXP_WIDTH + MANT_WIDTH;
 
+  wire [NODES*EXP_WIDTH-1:0] exp_bus;
+  wire [NODES*MANT_WIDTH-1:0] mant_bus;
 
-genvar i;
-generate
-  for (i = 0; i < NUM_INPUTS/2; i = i + 1) begin
-    First_stage_FLP_adder adder_first(
+  function automatic integer depth(input integer node);
+    integer current;
+    begin
+      // FIFO nodes are ordered by nondecreasing depth, so the right
+      // child always has the maximum depth among the two children.
+      current = node;
+      depth = 0;
+      while (current >= LEAVES) begin
+        current = 2 * (current - LEAVES) + 1;
+        depth = depth + 1;
+      end
+    end
+  endfunction
+
+  for (genvar i=0; i<PAIRS; i=i+1) begin : first_stage
+    First_stage_FLP_adder #(.EXP_WIDTH(EXP_WIDTH), .MANT_WIDTH(MANT_WIDTH)) adder_first (
       .clk(clk),
       .exp1(input_bus[2*i*MANT_WIDTH +: MANT_WIDTH]),
       .exp2(input_bus[(2*i+1)*MANT_WIDTH +: MANT_WIDTH]),
-      .exp(exp_bus[i*EXP_WIDTH+:EXP_WIDTH]),
-      .mant(mant_bus[i*MANT_WIDTH+:MANT_WIDTH])
-//      .mant(mant_bus[MANT_WIDTH+:i*NUM_INPUTS])
+      .exp(exp_bus[i*EXP_WIDTH +: EXP_WIDTH]),
+      .mant(mant_bus[i*MANT_WIDTH +: MANT_WIDTH])
     );
   end
-endgenerate
 
+  if (NUM_INPUTS % 2 != 0) begin : unpaired_logit
+    assign exp_bus[PAIRS*EXP_WIDTH +: EXP_WIDTH] =
+      $signed(input_bus[(NUM_INPUTS-1)*MANT_WIDTH +: MANT_WIDTH]);
+    assign mant_bus[PAIRS*MANT_WIDTH +: MANT_WIDTH] = {MANT_WIDTH{1'b0}};
+  end
 
-  generate
-    for (i = 0; i < NUM_INPUTS/2-1; i = i + 1) begin
-      FLP_adder adder(
-        .clk(clk),
-        .exp1(exp_bus[2*i*EXP_WIDTH+:EXP_WIDTH]),
-        .exp2(exp_bus[(2*i+1)*EXP_WIDTH+:EXP_WIDTH]),
-        .mant1(mant_bus[2*i*MANT_WIDTH +: MANT_WIDTH]),
-        .mant2(mant_bus[(2*i+1)*MANT_WIDTH +: MANT_WIDTH]),
-        .exp(exp_bus[(i+(NUM_INPUTS/2))*EXP_WIDTH+:EXP_WIDTH]),
-        .mant(mant_bus[(i+(NUM_INPUTS/2))*MANT_WIDTH+:MANT_WIDTH])
-      );
+  // Keep the FIFO pairing order. Delay only a child that arrives earlier.
+  for (genvar i=0; i<LEAVES-1; i=i+1) begin : sum_stage
+    localparam integer DEST = LEAVES + i;
+    wire [WORD_WIDTH-1:0] child [0:1];
+
+    for (genvar side=0; side<2; side=side+1) begin : align_child
+      localparam integer SOURCE = 2*i + side;
+      localparam integer WAIT = depth(DEST) - 1 - depth(SOURCE);
+      wire [WORD_WIDTH-1:0] stage [0:WAIT];
+      assign stage[0] = {exp_bus[SOURCE*EXP_WIDTH +: EXP_WIDTH],
+                         mant_bus[SOURCE*MANT_WIDTH +: MANT_WIDTH]};
+      for (genvar j=0; j<WAIT; j=j+1) begin : delay_stage
+        reg [WORD_WIDTH-1:0] delayed;
+        always @(posedge clk)
+          delayed <= stage[j];
+        assign stage[j+1] = delayed;
+      end
+      assign child[side] = stage[WAIT];
     end
-  endgenerate
 
-//  generate
-//    for (i = 0; i < NUM_INPUTS/2-1; i = i + 1) begin
-//      FLP_adder adder(
-//        .clk(clk),
-//        .exp1(exp_n[2*i][EXP_WIDTH-1:0]),
-//        .exp2(exp_n[(2*i)+1][EXP_WIDTH-1:0]),
-//        .mant1(mant_n[2*i]),
-//        .mant2(mant_n[(2*i)+1]),
-//        .exp(exp_n[i+NUM_INPUTS/2]),
-//        .mant(mant_n[i+NUM_INPUTS/2])
-//      );
-//    end
-//  endgenerate
+    FLP_adder #(.EXP_WIDTH(EXP_WIDTH), .MANT_WIDTH(MANT_WIDTH)) adder (
+      .clk(clk),
+      .exp1(child[0][WORD_WIDTH-1:MANT_WIDTH]),
+      .exp2(child[1][WORD_WIDTH-1:MANT_WIDTH]),
+      .mant1(child[0][MANT_WIDTH-1:0]),
+      .mant2(child[1][MANT_WIDTH-1:0]),
+      .exp(exp_bus[DEST*EXP_WIDTH +: EXP_WIDTH]),
+      .mant(mant_bus[DEST*MANT_WIDTH +: MANT_WIDTH])
+    );
+  end
 
-
-  assign exp = exp_bus[(NUM_INPUTS-2)*EXP_WIDTH+:EXP_WIDTH];
-  assign mant = mant_bus[(NUM_INPUTS-2)*MANT_WIDTH+:MANT_WIDTH];
-
-
+  assign exp = exp_bus[(NODES-1)*EXP_WIDTH +: EXP_WIDTH];
+  assign mant = mant_bus[(NODES-1)*MANT_WIDTH +: MANT_WIDTH];
 endmodule

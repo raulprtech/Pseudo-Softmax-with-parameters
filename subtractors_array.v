@@ -31,15 +31,17 @@ module subtractors_array #(
 
 );
 
-  wire [EXP_WIDTH-1:0] x[NUM_INPUTS-1:0];
-  wire [EXP_WIDTH-1:0] exp_sust[NUM_INPUTS-1:0];
+  localparam DIFF_WIDTH = ((EXP_WIDTH > MANT_WIDTH) ? EXP_WIDTH : MANT_WIDTH) + 1;
+  wire signed [DIFF_WIDTH-1:0] sum_exponent = $signed(exp_sum);
 
   genvar i;
   generate
-    for (i = 0; i < NUM_INPUTS; i = i + 1) begin
-      assign x[i] = input_bus[i*MANT_WIDTH +: MANT_WIDTH];
-      assign exp_sust[i] = x[i] - exp_sum;
-      assign exp_out[i*EXP_WIDTH +: EXP_WIDTH] = exp_sust[i];
+    for (i = 0; i < NUM_INPUTS; i = i + 1) begin : lane
+      wire signed [DIFF_WIDTH-1:0] logit = $signed(input_bus[i*MANT_WIDTH +: MANT_WIDTH]);
+      wire signed [DIFF_WIDTH-1:0] difference = logit - sum_exponent;
+
+      // Keep the existing exponent field width and its low-bit encoding.
+      assign exp_out[i*EXP_WIDTH +: EXP_WIDTH] = difference[EXP_WIDTH-1:0];
     end
   endgenerate
 
